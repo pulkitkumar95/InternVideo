@@ -50,6 +50,30 @@ def get_text_feat_dict(texts, clip, text_feat_d={}):
 def get_vid_feat(frames, vlm):
     return vlm.get_vid_features(frames)
 
+def get_text_features(texts, model, device=torch.device('cuda')):
+    vlm = model
+    vlm = vlm.to(device)
+
+    text_feat_d = {}
+    text_feat_d = get_text_feat_dict(texts, vlm, text_feat_d)
+    text_feats = [text_feat_d[t] for t in texts]
+    text_feats_tensor = torch.cat(text_feats, 0)
+    print(text_feats_tensor.shape)
+    return text_feats_tensor
+
+def get_video_features(frames, 
+                  model,
+                  config: dict={},
+                  device=torch.device('cuda')):
+    
+    vlm = model
+    vlm = vlm.to(device)
+    fn = config.get('num_frames', 8)
+    size_t = config.get('size_t', 224)
+    frames_tensor = frames2tensor(frames, fnum=fn, target_size=(size_t, size_t), device=device)
+    vid_feat = vlm.get_vid_feat(frames_tensor)
+    return vid_feat
+
 
 def retrieve_text(frames, 
                   texts, 
@@ -71,10 +95,10 @@ def retrieve_text(frames,
     text_feats = [text_feat_d[t] for t in texts]
     text_feats_tensor = torch.cat(text_feats, 0)
     
-    probs, idxs = vlm.predict_label(vid_feat, text_feats_tensor, top=topk)
+    probs, idxs, sims = vlm.predict_label(vid_feat, text_feats_tensor, top=topk)
 
     ret_texts = [texts[i] for i in idxs.long().numpy()[0].tolist()]
-    return ret_texts, probs.float().numpy()[0]
+    return ret_texts, probs.float().numpy()[0], sims.float().numpy()[0]
 
 
 def setup_internvideo2(config: dict):
@@ -309,5 +333,7 @@ class InternVideo2_Stage2(nn.Module):
                       txt_feat: torch.Tensor, 
                       top: int=5):
         label_probs = (100.0 * vid_feat @ txt_feat.T).softmax(dim=-1)
+        sims = vid_feat @ txt_feat.T
         top_probs, top_labels = label_probs.float().cpu().topk(top, dim=-1)
-        return top_probs, top_labels
+        top_sims, _ = sims.float().cpu().topk(top, dim=-1)
+        return top_probs, top_labels, top_sims
