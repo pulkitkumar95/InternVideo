@@ -575,10 +575,16 @@ class PretrainInternVideo2(nn.Module):
         }
     
     # @torch.cuda.amp.autocast(enabled=False)
-    def forward(self, x, mask=None, use_image=False, x_vis_return_idx=-1, x_vis_only=False):
+    def forward(self, x, mask=None, use_image=False, x_vis_return_idx=-1, x_vis_only=False,
+                frame_mask=None):
         x = self.patch_embed(x.type(self.dtype))
         # print(f"x.shape: {x.shape} x.dtype: {x.dtype}, model.dtype: {self.dtype}")
         B, T, L, C = x.shape  # T: temporal; L: spatial
+        if frame_mask is not None:
+            #TODO(pulkit): implementing only for 1 batch size
+            assert B == 1
+            x = x[:,frame_mask]
+            B, T, L, C = x.shape
         x = x.view([B, T * L, C])
 
         # append cls token

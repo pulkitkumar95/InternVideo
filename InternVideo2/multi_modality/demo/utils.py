@@ -29,15 +29,24 @@ def normalize(data):
 
 
 def frames2tensor(vid_list, fnum=8, target_size=(224, 224), device=torch.device('cuda')):
-    assert(len(vid_list) >= fnum)
-    step = len(vid_list) // fnum
+    # assert(len(vid_list) >= fnum)
+    step = max(len(vid_list) // fnum, 1)
     vid_list = vid_list[::step][:fnum]
+    if len(vid_list) < fnum:
+        frames_in_vid = len(vid_list)
+        # repearting the last frame
+        vid_list += [vid_list[-1]] * (fnum - len(vid_list))
+        #creatinf a mask
+        frame_mask = torch.zeros(fnum, dtype=torch.bool).to(device)
+        frame_mask[:frames_in_vid] = True
+    else:
+        frame_mask = None
     vid_list = [cv2.resize(x[:,:,::-1], target_size) for x in vid_list]
     vid_tube = [np.expand_dims(normalize(x), axis=(0, 1)) for x in vid_list]
     vid_tube = np.concatenate(vid_tube, axis=1)
     vid_tube = np.transpose(vid_tube, (0, 1, 4, 2, 3))
     vid_tube = torch.from_numpy(vid_tube).to(device, non_blocking=True).float()
-    return vid_tube
+    return vid_tube, frame_mask
 
 
 def get_text_feat_dict(texts, clip, text_feat_d={}):
@@ -70,8 +79,8 @@ def get_video_features(frames,
     vlm = vlm.to(device)
     fn = config.get('num_frames', 8)
     size_t = config.get('size_t', 224)
-    frames_tensor = frames2tensor(frames, fnum=fn, target_size=(size_t, size_t), device=device)
-    vid_feat = vlm.get_vid_feat(frames_tensor)
+    frames_tensor, frame_mask = frames2tensor(frames, fnum=fn, target_size=(size_t, size_t), device=device)
+    vid_feat = vlm.get_vid_feat(frames_tensor, frame_mask=frame_mask)
     return vid_feat
 
 
@@ -189,7 +198,8 @@ class InternVideo2_Stage2(nn.Module):
 
     def encode_vision(self, 
                       image: torch.Tensor, 
-                      test: bool=False):
+                      test: bool=False,
+                      frame_mask: torch.Tensor=None):
         """encode image / videos as features.
 
         Args:
@@ -211,7 +221,7 @@ class InternVideo2_Stage2(nn.Module):
         # keep_temporal=self.config.model.vision_encoder.keep_temporal
         if test:
             vision_embeds, pooled_vision_embeds, _, _ = self.vision_encoder(
-                image, None, use_image)
+                image, None, use_image, frame_mask=frame_mask)
             return vision_embeds, pooled_vision_embeds
         else:
             mask, targets_clip_middle_vis, targets_clip_final_vis = self.encode_teacher(image) 
@@ -296,7 +306,8 @@ class InternVideo2_Stage2(nn.Module):
         return encoder.bert if hasattr(encoder, "bert") else encoder
     
     def get_vid_feat(self, 
-                     frames: torch.Tensor):
+                     frames: torch.Tensor,
+                     frame_mask: torch.Tensor=None):
         """get the video features for the given frames.
 
         Args:
@@ -308,7 +319,7 @@ class InternVideo2_Stage2(nn.Module):
 
         """
         with torch.no_grad():  
-            _, vfeat = self.encode_vision(frames, test=True)
+            _, vfeat = self.encode_vision(frames, test=True, frame_mask=frame_mask)
             vfeat = self.vision_proj(vfeat)
             vfeat /= vfeat.norm(dim=-1, keepdim=True)
         return vfeat
