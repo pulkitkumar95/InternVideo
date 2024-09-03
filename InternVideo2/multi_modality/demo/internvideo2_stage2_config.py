@@ -6,10 +6,10 @@ from configs.model import *
 num_workers = 6
 
 # ========================= input ==========================
-num_frames = 4
-num_frames_test = 4
+num_frames = 4 #8 #4 #16
+num_frames_test = 4 #8 #4 #16 # this seems to only be used for their downstream retrieval
 batch_size = 8
-batch_size_test = 4
+batch_size_test = 4 #8 #4 #16
 size_t = 224
 max_txt_l = 40
 

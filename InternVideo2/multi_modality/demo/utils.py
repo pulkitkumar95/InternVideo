@@ -39,6 +39,56 @@ def frames2tensor(vid_list, fnum=8, target_size=(224, 224), device=torch.device(
     vid_tube = torch.from_numpy(vid_tube).to(device, non_blocking=True).float()
     return vid_tube
 
+def get_text_features(text, model, device=torch.device('cuda')):
+
+    model.to(device)    
+    text_feats = model.get_txt_feat(text)
+    return text_feats
+    # text_feat_d = {}
+    # text_feat_d = get_text_feat_dict(texts, vlm, text_feat_d)
+    # text_feats = [text_feat_d[t] for t in texts]
+    # text_feats_tensor = torch.cat(text_feats, 0)
+    # return text_feats_tensor
+
+def anet_frames2tensor(frames, fnum, use_image, device=torch.device('cuda')):
+    # assert(len(vid_list) >= fnum)
+    # step = len(vid_list) // fnum
+    # vid_list = vid_list[::step][:fnum]
+    
+    # Transforms have already been applied to the ActivityNet frames and segments
+    if use_image:
+        vid_tube = frames.unsqueeze(1) # [B,C,H,W] to [B,1,C,H,W] where B>1
+    else:
+        if frames.ndim == 4:
+            frames = frames.unsqueeze(0) # [T,C,H,W] to [B,T,C,H,W] where B=1
+        # use np.linspace to get fnum indices
+        sampled_indices = np.linspace(0, frames.size(1) - 1, fnum, dtype=int)
+        vid_tube = frames[:, sampled_indices, :, :, :] # [B,fnum,C,H,W]
+        
+    vid_tube = vid_tube.to(device, non_blocking=True).float()
+    return vid_tube
+
+def get_video_features(
+                frames, 
+                model,
+                config: dict={},
+                device=torch.device('cuda'),
+                use_image: bool=False,
+                ):
+    
+    """
+    Function to encode segments and individual frames alike.
+    """
+
+    vlm = model
+    vlm = vlm.to(device)
+    fn = config.get('num_frames', 8)
+    # size_t = config.get('size_t', 224)
+    # frames_tensor = frames2tensor(frames, fnum=fn, target_size=(size_t, size_t), device=device)
+    frames_tensor = anet_frames2tensor(frames, fnum=fn, use_image=use_image, device=device)
+    vid_feat = vlm.get_vid_feat(frames_tensor)
+    return vid_feat
+
 
 def get_text_feat_dict(texts, clip, text_feat_d={}):
     for t in texts:
@@ -63,13 +113,16 @@ def retrieve_text(frames,
     
     fn = config.get('num_frames', 8)
     size_t = config.get('size_t', 224)
-    frames_tensor = frames2tensor(frames, fnum=fn, target_size=(size_t, size_t), device=device)
+    # print(f"fn: {fn}, len(frames): {len(frames)} frames[0].shape: {frames[0].shape}")
+    frames_tensor = frames2tensor(frames, fnum=fn, target_size=(size_t, size_t), device=device) # torch.Size([1, fn, 3, 224, 224])
+    # print("frames_tensor.shape: ", frames_tensor.shape)
     vid_feat = vlm.get_vid_feat(frames_tensor)
-
+    # print("vid_feat.shape: ", vid_feat.shape)
     text_feat_d = {}
     text_feat_d = get_text_feat_dict(texts, vlm, text_feat_d)
     text_feats = [text_feat_d[t] for t in texts]
     text_feats_tensor = torch.cat(text_feats, 0)
+    # print(f"text_feats_tensor.shape: {text_feats_tensor.shape}")
     
     probs, idxs = vlm.predict_label(vid_feat, text_feats_tensor, top=topk)
 
@@ -285,7 +338,9 @@ class InternVideo2_Stage2(nn.Module):
         """
         with torch.no_grad():  
             _, vfeat = self.encode_vision(frames, test=True)
+            # print("vfeat.shape after encode_vision: ", vfeat.shape) # torch.Size([1, 768])
             vfeat = self.vision_proj(vfeat)
+            # print("vfeat.shape after vision_proj: ", vfeat.shape) # torch.Size([1, 512])
             vfeat /= vfeat.norm(dim=-1, keepdim=True)
         return vfeat
     
@@ -299,8 +354,11 @@ class InternVideo2_Stage2(nn.Module):
                 truncation=True, 
                 max_length=self.config.max_txt_l, 
                 return_tensors="pt",).to(self.config.device)
+            # print("text input to encode_text after tokenizer: ", text)
             _, tfeat = self.encode_text(text)
+            # print("tfeat.shape after encode_text: ", tfeat.shape)
             tfeat = self.text_proj(tfeat)
+            # print("tfeat.shape after text_proj: ", tfeat.shape)
             tfeat /= tfeat.norm(dim=-1, keepdim=True)
         return tfeat
     
@@ -308,6 +366,8 @@ class InternVideo2_Stage2(nn.Module):
                       vid_feat: torch.Tensor, 
                       txt_feat: torch.Tensor, 
                       top: int=5):
+        print("Predict label: vid_feat.shape: {}, txt_feat.T.shape: {}".format(vid_feat.shape, txt_feat.T.shape))
+        # breakpoint()
         label_probs = (100.0 * vid_feat @ txt_feat.T).softmax(dim=-1)
         top_probs, top_labels = label_probs.float().cpu().topk(top, dim=-1)
         return top_probs, top_labels
